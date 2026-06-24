@@ -63,6 +63,57 @@ def generate_suggested_questions(context):
     questions = response.choices[0].message.content.strip().split('\n')
     return [q.strip() for q in questions if q.strip()][:4]
 
+def generate_quiz(context, num_questions=5):
+    response = client.chat.completions.create(
+        model="llama-3.3-70b-versatile",
+        messages=[
+            {"role": "system", "content": "You are a helpful study assistant that creates multiple choice questions."},
+            {"role": "user", "content": f"""Based on this document, generate {num_questions} multiple choice questions.
+
+For each question follow this EXACT format:
+Q: [question]
+A) [option]
+B) [option]
+C) [option]
+D) [option]
+Answer: [correct letter]
+
+Document:
+{context[:4000]}"""}
+        ],
+        max_tokens=2000,
+        temperature=0.7
+    )
+    return response.choices[0].message.content
+
+def parse_quiz(quiz_text):
+    questions = []
+    blocks = quiz_text.strip().split('\n\n')
+    for block in blocks:
+        lines = [l.strip() for l in block.strip().split('\n') if l.strip()]
+        if len(lines) >= 6:
+            question = lines[0].replace('Q:', '').strip()
+            options = {}
+            answer = None
+            for line in lines[1:]:
+                if line.startswith('A)'):
+                    options['A'] = line[2:].strip()
+                elif line.startswith('B)'):
+                    options['B'] = line[2:].strip()
+                elif line.startswith('C)'):
+                    options['C'] = line[2:].strip()
+                elif line.startswith('D)'):
+                    options['D'] = line[2:].strip()
+                elif line.startswith('Answer:'):
+                    answer = line.replace('Answer:', '').strip()
+            if question and len(options) == 4 and answer:
+                questions.append({
+                    'question': question,
+                    'options': options,
+                    'answer': answer
+                })
+    return questions
+
 def format_chat_for_download(messages, pdf_name):
     output = f"Study Assistant — Chat Export\n"
     output += f"Document: {pdf_name}\n"
@@ -90,6 +141,12 @@ if "summary" not in st.session_state:
     st.session_state.summary = ""
 if "suggested_questions" not in st.session_state:
     st.session_state.suggested_questions = []
+if "quiz_questions" not in st.session_state:
+    st.session_state.quiz_questions = []
+if "quiz_answers" not in st.session_state:
+    st.session_state.quiz_answers = {}
+if "quiz_submitted" not in st.session_state:
+    st.session_state.quiz_submitted = False
 
 # Sidebar
 with st.sidebar:
@@ -104,6 +161,9 @@ with st.sidebar:
                 st.session_state.messages = []
                 st.session_state.summary = ""
                 st.session_state.suggested_questions = []
+                st.session_state.quiz_questions = []
+                st.session_state.quiz_answers = {}
+                st.session_state.quiz_submitted = False
 
         reader = PyPDF2.PdfReader(uploaded_file)
         st.success("✅ Document loaded!")
@@ -112,19 +172,23 @@ with st.sidebar:
 
         st.divider()
 
-        # Summary button
         if st.button("📋 Generate Summary", use_container_width=True):
             with st.spinner("Summarizing document..."):
                 st.session_state.summary = generate_summary(st.session_state.pdf_text)
 
-        # Suggested questions button
         if st.button("💡 Suggest Questions", use_container_width=True):
             with st.spinner("Generating questions..."):
                 st.session_state.suggested_questions = generate_suggested_questions(st.session_state.pdf_text)
 
+        if st.button("🧠 Generate Quiz", use_container_width=True):
+            with st.spinner("Generating quiz..."):
+                quiz_text = generate_quiz(st.session_state.pdf_text)
+                st.session_state.quiz_questions = parse_quiz(quiz_text)
+                st.session_state.quiz_answers = {}
+                st.session_state.quiz_submitted = False
+
         st.divider()
 
-        # Download chat
         if st.session_state.messages:
             chat_export = format_chat_for_download(
                 st.session_state.messages,
@@ -142,6 +206,9 @@ with st.sidebar:
             st.session_state.messages = []
             st.session_state.summary = ""
             st.session_state.suggested_questions = []
+            st.session_state.quiz_questions = []
+            st.session_state.quiz_answers = {}
+            st.session_state.quiz_submitted = False
             st.rerun()
 
     st.divider()
@@ -151,13 +218,11 @@ with st.sidebar:
 # Main area
 if st.session_state.pdf_text:
 
-    # Show summary if generated
     if st.session_state.summary:
         with st.expander("📋 Document Summary", expanded=True):
             st.markdown(st.session_state.summary)
         st.divider()
 
-    # Show suggested questions as clickable buttons
     if st.session_state.suggested_questions:
         st.subheader("💡 Suggested Questions")
         cols = st.columns(2)
@@ -175,13 +240,44 @@ if st.session_state.pdf_text:
                     st.rerun()
         st.divider()
 
-    # Chat history
+    if st.session_state.quiz_questions:
+        st.subheader("🧠 Quiz")
+        with st.form("quiz_form"):
+            for i, q in enumerate(st.session_state.quiz_questions):
+                st.markdown(f"**Q{i+1}. {q['question']}**")
+                options = [f"{k}) {v}" for k, v in q['options'].items()]
+                st.radio(
+                    f"Select answer for Q{i+1}",
+                    options,
+                    key=f"q_{i}",
+                    label_visibility="collapsed"
+                )
+                st.markdown("")
+            submitted = st.form_submit_button("Submit Quiz", use_container_width=True)
+
+        if submitted:
+            score = 0
+            st.subheader("📊 Results")
+            for i, q in enumerate(st.session_state.quiz_questions):
+                user_answer = st.session_state.get(f"q_{i}", "")
+                correct = q['answer']
+                user_letter = user_answer[0] if user_answer else ""
+                if user_letter == correct:
+                    score += 1
+                    st.success(f"✅ Q{i+1}: Correct!")
+                else:
+                    st.error(f"❌ Q{i+1}: Wrong — Correct answer: {correct}) {q['options'][correct]}")
+            st.divider()
+            st.metric("Your Score", f"{score}/{len(st.session_state.quiz_questions)}")
+            if score == len(st.session_state.quiz_questions):
+                st.balloons()
+        st.divider()
+
     st.subheader(f"💬 Chat about: {st.session_state.pdf_name}")
     for message in st.session_state.messages:
         with st.chat_message(message["role"]):
             st.write(message["content"])
 
-    # Chat input
     question = st.chat_input("Ask anything about the document...")
     if question:
         st.session_state.messages.append({"role": "user", "content": question})
