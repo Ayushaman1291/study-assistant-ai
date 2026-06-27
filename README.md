@@ -2,7 +2,7 @@
 
 An AI-powered study assistant that lets you upload any PDF document and have an intelligent conversation about it.
 
-🔗 **Live Demo:** [Coming Soon]
+🔗 **Live Demo:** [Click here to try the app](https://study-assistant-ai-qram5qugqs7n3irby4vvjf.streamlit.app/)
 
 ---
 
